@@ -1,4 +1,5 @@
-import { perPurchaseCapUsd, reservePct, Vendor } from './vendors';
+import { perPurchaseCapUsd, reservePct, Vendor, AGENT_RECIPIENT_ADDRESSES } from './vendors';
+import { AgentResult } from './agent';
 
 export interface X402PurchaseResult {
   success: boolean;
@@ -12,9 +13,14 @@ export interface X402PurchaseResult {
   agentAddress?: string;
 }
 
-export const BASE_SEPOLIA_CHAIN_ID = 84532;
-export const BASE_SEPOLIA_CHAIN_ID_HEX = '0x14a34';
-export const BASE_SEPOLIA_EXPLORER_URL = 'https://sepolia.basescan.org';
+export const SEPOLIA_CHAIN_ID = 11155111;
+export const SEPOLIA_CHAIN_ID_HEX = '0xaa36a7';
+export const SEPOLIA_EXPLORER_URL = 'https://sepolia.etherscan.io';
+
+// Backwards-compatible aliases
+export const BASE_SEPOLIA_CHAIN_ID = SEPOLIA_CHAIN_ID;
+export const BASE_SEPOLIA_CHAIN_ID_HEX = SEPOLIA_CHAIN_ID_HEX;
+export const BASE_SEPOLIA_EXPLORER_URL = SEPOLIA_EXPLORER_URL;
 
 /**
  * Validates network configuration. Refuses to execute if configured for mainnet.
@@ -28,6 +34,7 @@ export function validateX402Network(): { allowed: boolean; error?: string; netwo
 
   const isMainnet =
     rawNetwork === 'mainnet' ||
+    rawNetwork === 'ethereum' ||
     rawNetwork === 'base' ||
     rawNetwork === 'base-mainnet' ||
     rawNetwork === '8453' ||
@@ -43,7 +50,7 @@ export function validateX402Network(): { allowed: boolean; error?: string; netwo
 
   return {
     allowed: true,
-    networkName: 'Base Sepolia Testnet (84532)',
+    networkName: 'Ethereum Sepolia Testnet (11155111)',
   };
 }
 
@@ -89,7 +96,8 @@ export async function purchaseFromPaidSource(
   currentSpentUsd: number,
   totalBudgetUsd: number,
   userAddress?: string | null,
-  vendor?: Vendor | { id: string; name: string; agentAddress?: string }
+  vendor?: Vendor | { id: string; name: string; agentAddress?: string },
+  question?: string
 ): Promise<X402PurchaseResult> {
   // 1. Enforce network safety
   const netSafety = validateX402Network();
@@ -119,34 +127,34 @@ export async function purchaseFromPaidSource(
   if (typeof window === 'undefined' || !window.ethereum) {
     return {
       success: false,
-      sourceType: 'simulated',
-      fallbackToSimulated: true,
+      sourceType: 'real_testnet',
+      fallbackToSimulated: false,
       message:
-        'No Web3 wallet detected. Connect MetaMask on Base Sepolia to pay agents via x402. Falling back to simulated data.',
+        'No Web3 wallet detected. Connect MetaMask on Ethereum Sepolia to pay agents via x402 on-chain.',
     };
   }
 
   if (!userAddress) {
     return {
       success: false,
-      sourceType: 'simulated',
-      fallbackToSimulated: true,
+      sourceType: 'real_testnet',
+      fallbackToSimulated: false,
       message:
-        'User wallet not connected. Connect your wallet to pay data provider agents directly on Base Sepolia. Falling back to simulated data.',
+        'User wallet not connected. Connect your wallet to pay data provider agents directly on Ethereum Sepolia.',
     };
   }
 
   try {
     const currentChainId = (await window.ethereum.request({ method: 'eth_chainId' })) as string;
     if (
-      currentChainId !== BASE_SEPOLIA_CHAIN_ID_HEX &&
-      parseInt(currentChainId || '0', 16) !== BASE_SEPOLIA_CHAIN_ID
+      currentChainId !== SEPOLIA_CHAIN_ID_HEX &&
+      parseInt(currentChainId || '0', 16) !== SEPOLIA_CHAIN_ID
     ) {
       return {
         success: false,
-        sourceType: 'simulated',
-        fallbackToSimulated: true,
-        message: 'Wallet is not connected to Base Sepolia (chain ID 84532). Please switch network in wallet.',
+        sourceType: 'real_testnet',
+        fallbackToSimulated: false,
+        message: 'Wallet is not connected to Ethereum Sepolia (chain ID 11155111). Please switch network in wallet.',
       };
     }
 
@@ -172,7 +180,7 @@ export async function purchaseFromPaidSource(
     const agentRecipient =
       vendor?.agentAddress ||
       paySpecs?.x402?.recipient ||
-      '0x845321042E94b15998a6B6002fD4B171eA41E1C5';
+      '0x111551112E94b15998a6B6002fD4B171eA41E1C5';
 
     // 6. Request test payment from user's injected wallet to the agent
     // Payer: userAddress (out of user's wallet)
@@ -192,9 +200,9 @@ export async function purchaseFromPaidSource(
     if (!realTxHash || !realTxHash.startsWith('0x')) {
       return {
         success: false,
-        sourceType: 'simulated',
-        fallbackToSimulated: true,
-        message: 'User declined payment transaction to the agent. Falling back to simulated data.',
+        sourceType: 'real_testnet',
+        fallbackToSimulated: false,
+        message: 'Payment transaction declined in wallet. On-chain settlement cancelled.',
       };
     }
 
@@ -205,7 +213,7 @@ export async function purchaseFromPaidSource(
         'Content-Type': 'application/json',
         'x-payment-tx-hash': realTxHash,
       },
-      body: JSON.stringify({ txHash: realTxHash, vendor: vendorId }),
+      body: JSON.stringify({ txHash: realTxHash, vendor: vendorId, question }),
     });
 
     const postData = await postRes.json();
@@ -213,21 +221,143 @@ export async function purchaseFromPaidSource(
     return {
       success: true,
       txHash: realTxHash,
-      explorerUrl: `https://sepolia.basescan.org/tx/${realTxHash}`,
+      explorerUrl: `${SEPOLIA_EXPLORER_URL}/tx/${realTxHash}`,
       evidence: postData?.evidence,
       sourceType: 'real_testnet',
       fallbackToSimulated: false,
       agentAddress: agentRecipient,
-      message: `x402 payment settled: User ${userAddress.slice(0, 6)}... paid Agent ${agentRecipient.slice(0, 6)}... on Base Sepolia!`,
+      message: `x402 payment settled: User ${userAddress.slice(0, 6)}... paid Agent ${agentRecipient.slice(0, 6)}... on Ethereum Sepolia!`,
     };
   } catch (err: unknown) {
     const errorMsg = err instanceof Error ? err.message : 'Wallet transaction failed';
     return {
       success: false,
-      sourceType: 'simulated',
-      fallbackToSimulated: true,
+      sourceType: 'real_testnet',
+      fallbackToSimulated: false,
       error: errorMsg,
-      message: `Transaction not confirmed by user: ${errorMsg}. Falling back to simulated intelligence.`,
+      message: `On-chain transaction not confirmed: ${errorMsg}.`,
+    };
+  }
+}
+
+export interface OracleAgentSessionResult {
+  success: boolean;
+  txHash?: string;
+  explorerUrl?: string;
+  agentRecipient?: string;
+  agentResult?: AgentResult;
+  message?: string;
+  error?: string;
+}
+
+/**
+ * Executes a single x402 payment authorizing the research budget to the Oracle Agent.
+ * The Oracle Agent then autonomously manages all sub-purchases and live web scraping.
+ */
+export async function purchaseOracleAgentSession(
+  budgetUsd: number,
+  userAddress: string,
+  question: string
+): Promise<OracleAgentSessionResult> {
+  // 1. Enforce network safety
+  const netSafety = validateX402Network();
+  if (!netSafety.allowed) {
+    return {
+      success: false,
+      error: netSafety.error,
+      message: 'Network safety violation: mainnet execution blocked.',
+    };
+  }
+
+  // 2. Check for injected wallet
+  if (typeof window === 'undefined' || !window.ethereum) {
+    return {
+      success: false,
+      message: 'No Web3 wallet detected. Connect MetaMask on Ethereum Sepolia.',
+    };
+  }
+
+  try {
+    const currentChainId = (await window.ethereum.request({ method: 'eth_chainId' })) as string;
+    if (
+      currentChainId !== SEPOLIA_CHAIN_ID_HEX &&
+      parseInt(currentChainId || '0', 16) !== SEPOLIA_CHAIN_ID
+    ) {
+      return {
+        success: false,
+        message: 'Wallet is not connected to Ethereum Sepolia (chain ID 11155111). Please switch network.',
+      };
+    }
+
+    // 3. Inspect x402 payment requirements from the Oracle Agent gateway
+    const checkRes = await fetch(
+      `/api/paid-source?vendor=oracle_agent&budget=${budgetUsd}&question=${encodeURIComponent(question)}`
+    );
+
+    const paySpecs = await checkRes.json();
+    const agentRecipient =
+      paySpecs?.x402?.recipient ||
+      AGENT_RECIPIENT_ADDRESSES.oracle_agent ||
+      '0x111551112E94b15998a6B6002fD4B171eA41E1C5';
+
+    // 4. Request ONE single payment from user's wallet to the Oracle Agent
+    const txParams = {
+      from: userAddress,
+      to: agentRecipient,
+      value: '0x0', // Micro-settlement ping
+      data: '0x78343032', // "x402" in hex
+    };
+
+    const realTxHash = (await window.ethereum.request({
+      method: 'eth_sendTransaction',
+      params: [txParams],
+    })) as string;
+
+    if (!realTxHash || !realTxHash.startsWith('0x')) {
+      return {
+        success: false,
+        message: 'x402 budget authorization cancelled in MetaMask.',
+      };
+    }
+
+    // 5. Submit verified proof to Oracle Agent to trigger autonomous execution
+    const postRes = await fetch('/api/paid-source', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-payment-tx-hash': realTxHash,
+      },
+      body: JSON.stringify({
+        txHash: realTxHash,
+        vendor: 'oracle_agent',
+        question,
+        budget: budgetUsd,
+      }),
+    });
+
+    const postData = await postRes.json();
+
+    if (!postRes.ok || !postData?.paid) {
+      return {
+        success: false,
+        message: postData?.error || 'Failed to complete autonomous research execution.',
+      };
+    }
+
+    return {
+      success: true,
+      txHash: realTxHash,
+      explorerUrl: `${SEPOLIA_EXPLORER_URL}/tx/${realTxHash}`,
+      agentRecipient,
+      agentResult: postData?.agentResult,
+      message: `x402 payment confirmed on Ethereum Sepolia! Oracle Agent autonomously acquired evidence.`,
+    };
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : 'Wallet transaction failed';
+    return {
+      success: false,
+      error: errorMsg,
+      message: `On-chain authorization failed: ${errorMsg}`,
     };
   }
 }

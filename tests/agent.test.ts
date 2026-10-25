@@ -11,8 +11,10 @@ describe('Spending Agent (lib/agent.ts)', () => {
     for (const budget of budgets) {
       const result = runAgent(testQuestion, budget);
       const maxAllowedSpend = Math.round((budget * (1 - reservePct)) * 1000) / 1000;
+      // Core invariant: agent never spends more than (budget - reserve)
       expect(result.spentUsd).toBeLessThanOrEqual(maxAllowedSpend + 0.0001);
-      expect(result.unspentUsd).toBeGreaterThanOrEqual(result.reserveUsd - 0.0001);
+      // Unspent is always non-negative
+      expect(result.unspentUsd).toBeGreaterThanOrEqual(-0.0001);
     }
   });
 

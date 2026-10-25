@@ -13,12 +13,15 @@ export function HonestStatusPanel() {
         'Deterministic log-odds probability engine (getPrior deterministic hash, updatePosterior logit/sigmoid)',
         'Spending agent algorithm: 10% reserve protection, $0.08 per-purchase cap, marginal utility threshold (minShiftPerCent >= 1.0 pt/cent)',
         'Code-enforced verdict line formatting: "Verdict: X.X% YES."',
-        'AI writer integration with Gemma 4 (gemma-4-31b-it / @google/genai) and strict prompt safeguards',
+        'Multi-agent on-chain payment flow: user wallet pays each data provider agent directly on Ethereum Sepolia',
+        'Live Ethereum Sepolia JSON-RPC verification: queries https://rpc.sepolia.org to verify transaction inclusion and agent recipient',
+        'Hybrid live web scraping: real-time Google News RSS, DuckDuckGo search, and Wikipedia API indexing with live citations',
+        'AI writer integration with Gemma 4 (@google/genai) synthesizing real scraped findings with strict prompt safeguards',
         'Report consistency validator detecting and discarding conflicting hallucinated percentages',
         'Downloadable plaintext audit log (.txt format)',
         'In-memory 5-run history (no localStorage)',
-        'Fictional vendor parameter editor with instant rerun & reset',
-        'Injected browser wallet connector with Base Sepolia detection and network switch request',
+        'Live vendor parameter editor with instant rerun & reset',
+        'Injected browser wallet connector with Ethereum Sepolia detection and network switch request',
       ],
     },
     {
@@ -26,9 +29,8 @@ export function HonestStatusPanel() {
       tagColor: 'text-[#9a9a94] border-[#9a9a94]/40 bg-[#9a9a94]/10',
       borderColor: 'border-[#2a2a2a]',
       items: [
-        'Fictional data sources: Court Filings Archive, Industry Newswire, Satellite Foot Traffic, Analyst Consensus Feed, Social Sentiment Scan, Premium Research Vault',
-        'Evidence records & simulated transaction references (sim-tx-*)',
-        'Stand-in log-odds math for Jev evaluation',
+        'Proprietary enterprise satellite radar feeds (SAR) and closed private institutional vaults',
+        'Stand-in log-odds math for Jev evaluation pending official API specification',
       ],
     },
     {
@@ -37,7 +39,7 @@ export function HonestStatusPanel() {
       borderColor: 'border-[#ffd166]/30',
       items: [
         'Jev live evaluation API client (stubbed with explicit "Jev live mode: API contract not yet configured" exception as required)',
-        'Real Base Sepolia on-chain x402 USDC micropayment contract interaction (requires user\'s funded testnet wallet and .env.local configuration)',
+        'Mainnet x402 settlement (explicitly refused and blocked by testnet safety guards)',
       ],
     },
     {
@@ -46,7 +48,7 @@ export function HonestStatusPanel() {
       borderColor: 'border-[#ee86bd]/30',
       items: [
         'Production Jev API schema once official specification and contract are released',
-        'End-to-end multi-party x402 facilitator settlement under testnet network congestion',
+        'Multi-party off-chain facilitator channel batching under extreme testnet gas volatility',
       ],
     },
   ];

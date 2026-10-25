@@ -1,4 +1,4 @@
-interface EthereumRpcError {
+export interface EthereumRpcError {
   code: number;
   message: string;
 }

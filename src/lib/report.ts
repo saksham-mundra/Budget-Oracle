@@ -76,11 +76,24 @@ MANDATORY RULES:
     buys.length === 0
       ? 'No sources were purchased (all were blocked by spending limits or deemed not worth their price).'
       : buys
-          .map(
-            (b, idx) =>
-              `${idx + 1}. [${b.vendorName}] (Cost: $${b.priceUsd.toFixed(3)}, Shift efficiency: ${b.perCent?.toFixed(2)} pts/cent).`
-          )
-          .join('\n');
+          .map((b, idx) => {
+            let details = `${idx + 1}. [${b.vendorName}] (Cost: $${b.priceUsd.toFixed(3)}, Shift efficiency: ${b.perCent?.toFixed(2)} pts/cent).`;
+            if (b.evidence?.headline) {
+              details += `\n   Headline: ${b.evidence.headline}`;
+            }
+            if (b.evidence?.finding) {
+              details += `\n   Scraped Evidence Finding:\n   ${b.evidence.finding}`;
+            }
+            if (b.evidence?.sources && b.evidence.sources.length > 0) {
+              const srcLines = b.evidence.sources
+                .slice(0, 3)
+                .map((s) => `     - "${s.title}" (${s.publisher || 'Web'}): ${s.snippet} [URL: ${s.url}]`)
+                .join('\n');
+              details += `\n   Verified Web Citations:\n${srcLines}`;
+            }
+            return details;
+          })
+          .join('\n\n');
 
   const userPrompt = `Research Question: "${question}"
 

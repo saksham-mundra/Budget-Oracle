@@ -8,10 +8,10 @@ describe('Purchase Safeguards (lib/purchase.ts)', () => {
     expect(check.reason).toContain('per-purchase cap');
   });
 
-  it('blocks purchases that would violate the 10% reserve', () => {
-    // Budget $1.00, Reserve $0.10. Max allowed spend = $0.90.
-    // If spent is $0.86 and vendor costs $0.05, total would be $0.91 -> BLOCKED
-    const check = verifyPurchaseRules(0.05, 0.86, 1.0);
+  it('blocks purchases that would violate the 1% reserve', () => {
+    // Budget $1.00, Reserve $0.01 (1%). Max allowed spend = $0.99.
+    // If spent is $0.96 and vendor costs $0.04, total would be $1.00 -> BLOCKED (exceeds $0.99)
+    const check = verifyPurchaseRules(0.04, 0.96, 1.0);
     expect(check.approved).toBe(false);
     expect(check.reason).toContain('reserve');
   });

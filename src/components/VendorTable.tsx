@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { Vendor, getDefaultVendors } from '@/lib/vendors';
+import { Vendor } from '@/lib/vendors';
 
 interface VendorTableProps {
   vendors: Vendor[];
@@ -29,10 +29,10 @@ export function VendorTable({ vendors, onChange, onReset }: VendorTableProps) {
       <div className="flex items-center justify-between mb-4">
         <div>
           <h2 className="text-lg font-serif font-bold text-[#f4f4f0]">
-            Fictional Data Sources & Pricing
+            Live Intelligence Sources & Pricing
           </h2>
           <p className="text-xs text-[#9a9a94]">
-            Edit vendor prices and log-odds push directions. Negative deltas push toward NO, positive toward YES.
+            Data provider agents with Ethereum Sepolia on-chain settlement and live real-time web scraping.
           </p>
         </div>
         <button

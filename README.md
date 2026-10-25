@@ -11,7 +11,7 @@ Budget Oracle is an autonomous research agent built with Next.js (App Router), T
 1. **Probability is Code-Only**: Probability numbers are calculated deterministically via log-odds math and Jev evaluation rules. The AI writer never estimates, calculates, or alters the probability.
 2. **Transparent Provenance**: Every data source and engine displays a badge: **`REAL (testnet)`** or **`SIMULATED`**.
 3. **No Key Storage**: The application never asks for, accepts, or stores private keys or seed phrases. Web3 transactions use browser-injected wallets (MetaMask) directly.
-4. **Testnet Only**: Strictly restricted to testnets (Base Sepolia). The app will deliberately refuse to run on Ethereum or Base mainnet.
+4. **Testnet Only**: Strictly restricted to testnets (Ethereum Sepolia). The app will deliberately refuse to run on Ethereum or Base mainnet.
 
 ---
 
@@ -29,13 +29,15 @@ Budget Oracle is an autonomous research agent built with Next.js (App Router), T
    - Deterministic question prior hash in `[0.35, 0.65]`.
    - Log-odds Bayesian updates: `updatePosterior(current, delta) = sigmoid(logit(current) + delta)`.
 4. **AI Synthesis Reporter (`src/lib/report.ts` & `src/app/api/report/route.ts`)**:
-   - Calls **Gemma 4** (`gemma-4-31b-it` / `@google/genai`) on the server route.
+   - Calls **Gemma 4** (`gemma-4-31b-it` / `@google/genai`) on the server route with graceful fallback tiering.
    - Post-generation number consistency validator: if the AI outputs any probability conflicting with the agent's code verdict, it is immediately discarded.
-5. **x402 Micropayments (`src/app/api/paid-source/route.ts` & `src/lib/purchase.ts`)**:
-   - The user connects their MetaMask wallet on Base Sepolia.
-   - When evidence is purchased, payments flow **directly out of the user's wallet** into the specific **data provider agent's wallet address** on Base Sepolia via x402 micropayments.
+5. **x402 Multi-Agent Micropayments (`src/app/api/paid-source/route.ts` & `src/lib/purchase.ts`)**:
+   - The user connects their MetaMask wallet on Ethereum Sepolia.
+   - When evidence is purchased, payments flow **directly out of the user's wallet** sequentially into each specific **data provider agent's wallet address** on Ethereum Sepolia via x402 micropayments.
    - Eliminates any need to configure a static personal recipient address in `.env.local`.
-   - Returns verified on-chain transaction hashes linked directly to the Base Sepolia block explorer.
+   - Performs real-time Ethereum Sepolia JSON-RPC verification (`https://rpc.sepolia.org`) and returns verified on-chain transaction hashes linked directly to the Etherscan block explorer.
+6. **System Status Introspection (`src/app/api/system-status/route.ts`)**:
+   - Introspects server environment variables without leaking credentials, dynamically reflecting Writer and Jev configuration states.
 
 ---
 
@@ -46,25 +48,28 @@ Budget Oracle is an autonomous research agent built with Next.js (App Router), T
 - Deterministic log-odds probability engine (`getPrior` deterministic hash, `updatePosterior` logit/sigmoid)
 - Spending agent algorithm: 10% reserve protection, $0.08 per-purchase cap, marginal utility threshold (`minShiftPerCent >= 1.0` pt/cent)
 - Code-enforced verdict line formatting: `"Verdict: X.X% YES."`
+- Multi-agent on-chain payment flow: user wallet pays each data provider agent directly on Ethereum Sepolia
+- Live Ethereum Sepolia JSON-RPC verification: queries `https://rpc.sepolia.org` to verify transaction inclusion and agent recipient
+- Domain-specific intelligence dossiers for all vendor agents with context-aware findings
 - AI writer integration with Gemma 4 (`gemma-4-31b-it` / `@google/genai`) with strict system prompts
 - Report consistency validator detecting and discarding conflicting hallucinated percentages
 - Downloadable plaintext audit log (`budget-oracle-log-*.txt`)
 - In-memory 5-run history (no localStorage)
 - Fictional vendor parameter editor with instant rerun & reset
-- Injected browser wallet connector with Base Sepolia detection and network switch request
+- Injected browser wallet connector with Ethereum Sepolia detection and network switch request
 
 ### 2. Simulated
 - Fictional data sources: Court Filings Archive, Industry Newswire, Satellite Foot Traffic, Analyst Consensus Feed, Social Sentiment Scan, Premium Research Vault
-- Evidence records & simulated transaction references (`sim-tx-*`)
+- Default simulated transaction references (`sim-tx-*`) when running without wallet connection
 - Stand-in log-odds math for Jev evaluation
 
 ### 3. Written but Not Run
 - Jev live evaluation API client (stubbed with explicit `"Jev live mode: API contract not yet configured"` exception as required)
-- Real Base Sepolia on-chain x402 USDC micropayment contract interaction (requires user's funded testnet wallet and `.env.local` configuration)
+- Mainnet x402 settlement (explicitly refused and blocked by testnet safety guards)
 
 ### 4. Still to Validate
 - Production Jev API schema once official specification and contract are released
-- End-to-end multi-party x402 facilitator settlement under testnet network congestion
+- Multi-party off-chain facilitator channel batching under extreme testnet gas volatility
 
 ---
 
@@ -83,7 +88,7 @@ npm install
 ```bash
 npm test
 ```
-Runs 19 deterministic unit tests covering the pure-code router, spending agent reserve protection and caps, report consistency validator, and purchase safety gates.
+Runs 22 deterministic unit tests covering the pure-code router, spending agent reserve protection and caps, report consistency validator, purchase safety gates, and real web scraper engine.
 
 ### 3. Configure Environment Variables
 Copy `.env.example` to `.env.local`:
@@ -93,7 +98,7 @@ cp .env.example .env.local
 
 Populate the keys in `.env.local`:
 ```env
-# Gemma 4 AI Writer (Google Gen AI API key)
+# AI Writer (Google AI Studio / Gemini API)
 GEMINI_API_KEY=your_gemini_api_key_here
 
 # Jev Engine Mode ("simulated" or "live")
@@ -101,7 +106,6 @@ JEV_MODE=simulated
 
 # x402 Testnet Configuration
 X402_NETWORK=testnet
-X402_RECIPIENT_ADDRESS=0xYourBaseSepoliaWalletAddress
 X402_FACILITATOR_URL=https://x402.org/facilitator
 ```
 
@@ -111,19 +115,27 @@ X402_FACILITATOR_URL=https://x402.org/facilitator
 ```bash
 npm run dev
 ```
-Open [http://localhost:3000](http://localhost:3000) in your browser.
+- **Executive Landing Page**: [http://localhost:3000](http://localhost:3000)
+- **Interactive Research Terminal**: [http://localhost:3000/terminal](http://localhost:3000/terminal)
 
-### 5. Build for Production
-```bash
-npm run build
-npm start
-```
+### 5. Deploy to Vercel
+
+Budget Oracle is ready for 1-click deployment on [Vercel](https://vercel.com):
+
+1. **Import the repository** on Vercel: `https://github.com/saksham-mundra/Budget-Oracle.git`
+2. **Framework Preset**: Vercel will automatically detect `Next.js`.
+3. **Environment Variables**: Add the following in the Vercel project settings:
+   - `GEMINI_API_KEY`: Your Google AI Studio API key.
+   - `JEV_MODE`: `simulated`
+   - `X402_NETWORK`: `testnet`
+   - `X402_FACILITATOR_URL`: `https://x402.org/facilitator`
+4. Click **Deploy**. Vercel will build and deploy the production bundle with Edge & Serverless API routes.
 
 ---
 
 ## Testnet Safety Notice
 
-> **TESTNET ONLY**: Never connect a wallet that holds real assets. Budget Oracle only interacts with Base Sepolia (Chain ID `84532`). Any attempt to configure the app for mainnet is blocked by internal safety assertions in `lib/purchase.ts`.
+> **TESTNET ONLY**: Never connect a wallet that holds real assets. Budget Oracle only interacts with Ethereum Sepolia (Chain ID `11155111`). Any attempt to configure the app for mainnet is blocked by internal safety assertions in `lib/purchase.ts`.
 
 ---
 
@@ -138,16 +150,17 @@ budget-oracle/
 │   │   │   └── report/route.ts       # Gemma 4 synthesis route
 │   │   ├── globals.css               # Dark theme & styling tokens
 │   │   ├── layout.tsx                # Serif & Sans typography setup
-│   │   └── page.tsx                  # 14 UI sections in exact order
+│   │   ├── terminal/page.tsx         # Dedicated live research console
+│   │   └── page.tsx                  # Landing page (Slide deck mapped)
 │   ├── components/
 │   │   ├── CompareChart.tsx          # $0.10, $0.50, $1.00 budget chart
 │   │   ├── HonestStatusPanel.tsx     # 4 transparency status cards
 │   │   ├── VendorTable.tsx           # Editable pricing & deltas table
-│   │   └── WalletConnect.tsx         # MetaMask & Base Sepolia connector
+│   │   └── WalletConnect.tsx         # MetaMask & Ethereum Sepolia connector
 │   ├── lib/
 │   │   ├── agent.ts                  # Pure deterministic spending agent
 │   │   ├── jev.ts                    # Log-odds probability engine
-│   │   ├── purchase.ts               # x402 Base Sepolia purchase logic
+│   │   ├── purchase.ts               # x402 Ethereum Sepolia purchase logic
 │   │   ├── report.ts                 # Verdict formatter & validator
 │   │   ├── router.ts                 # Pure code query router
 │   │   └── vendors.ts                # Vendor datasets & spending caps

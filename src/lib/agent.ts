@@ -22,6 +22,19 @@ export interface AgentLogEntry {
   shiftPoints?: number;
   txRef?: string;
   reason?: string;
+  evidence?: {
+    headline?: string;
+    finding?: string;
+    sources?: Array<{
+      title: string;
+      url: string;
+      snippet: string;
+      publisher?: string;
+      publishedDate?: string;
+      sourceType?: string;
+    }>;
+    engineUsed?: string;
+  };
 }
 
 export interface AgentResult {

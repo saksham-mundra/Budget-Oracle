@@ -7,7 +7,7 @@ import {
   buildWriterPrompt,
   validateReportText,
 } from '@/lib/report';
-
+import { scrapeEvidenceForVendor } from '@/lib/scraper';
 
 export async function POST(req: NextRequest) {
   try {
@@ -43,50 +43,72 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(response);
     }
 
+    // Enrich bought sources with live scraped web evidence if not already attached
+    const enrichedBuys = await Promise.all(
+      (buys || []).map(async (b) => {
+        if (b.evidence && b.evidence.finding) return b;
+        try {
+          const scraped = await scrapeEvidenceForVendor(b.vendorId, question);
+          return {
+            ...b,
+            evidence: {
+              headline: scraped.headline,
+              finding: scraped.finding,
+              sources: scraped.sources,
+              engineUsed: scraped.engineUsed,
+            },
+          };
+        } catch {
+          return b;
+        }
+      })
+    );
+
     const { systemInstruction, userPrompt } = buildWriterPrompt(
       question,
-      buys || [],
+      enrichedBuys,
       stopReason
     );
 
-    const modelName = process.env.GEMMA_MODEL || 'gemma-4-31b-it';
+    const modelCandidates = [
+      process.env.GEMMA_MODEL,
+      'gemini-3.8-flash',
+      'gemma-4-31b-it',
+    ].filter(Boolean) as string[];
+
     let rawText = '';
+    let usedModel = modelCandidates[0] || 'gemini-3.8-flash';
 
-    try {
-      const ai = new GoogleGenAI({ apiKey });
-      const result = await ai.models.generateContent({
-        model: modelName,
-        contents: userPrompt,
-        config: {
-          systemInstruction,
-          maxOutputTokens: tokenCap,
-          temperature: 0.2,
-        },
-      });
-
-      rawText = result.text || '';
-    } catch (genError: unknown) {
-      console.warn('Gemma 4 generation error, attempting fallback format:', genError);
-      // Fallback try with gemma-4-26b-a4b-it or gemini-2.5-flash if user's key tier requires it
+    for (const currentModel of modelCandidates) {
       try {
         const ai = new GoogleGenAI({ apiKey });
-        const fallbackResult = await ai.models.generateContent({
-          model: 'gemma-4-26b-a4b-it',
-          contents: `${systemInstruction}\n\n${userPrompt}`,
+        const result = await ai.models.generateContent({
+          model: currentModel,
+          contents: userPrompt,
           config: {
-            maxOutputTokens: tokenCap,
+            systemInstruction,
+            maxOutputTokens: Math.max(250, tokenCap),
+            temperature: 0.2,
           },
         });
-        rawText = fallbackResult.text || '';
-      } catch (secondError: unknown) {
-        const msg = secondError instanceof Error ? secondError.message : 'Unknown generation error';
-        return NextResponse.json({
-          verdictLine,
-          reportText: `Writer service error: ${msg}`,
-          status: 'unavailable',
-          engineUsed: `Gemma 4 (${modelName})`,
-        });
+
+        if (result.text && result.text.trim().length > 0) {
+          rawText = result.text;
+          usedModel = currentModel;
+          break;
+        }
+      } catch (genError: unknown) {
+        console.warn(`Generation attempt failed on model ${currentModel}:`, genError);
       }
+    }
+
+    if (!rawText) {
+      return NextResponse.json({
+        verdictLine,
+        reportText: 'AI Synthesis currently busy or rate-limited on Google AI Studio. Please retry.',
+        status: 'unavailable',
+        engineUsed: `Google AI (${usedModel})`,
+      });
     }
 
     // Post-generation validation: verify writer did not emit a conflicting probability percentage
@@ -98,7 +120,7 @@ export async function POST(req: NextRequest) {
         reportText: null,
         status: 'discarded',
         discardNote: validation.note || 'Writer output discarded: it contained a conflicting number.',
-        engineUsed: `Gemma 4 (${modelName})`,
+        engineUsed: `Google AI (${usedModel})`,
       };
       return NextResponse.json(response);
     }
@@ -107,7 +129,7 @@ export async function POST(req: NextRequest) {
       verdictLine,
       reportText: rawText.trim(),
       status: 'success',
-      engineUsed: `Gemma 4 (${modelName})`,
+      engineUsed: `Google AI (${usedModel})`,
     };
     return NextResponse.json(response);
   } catch (err: unknown) {

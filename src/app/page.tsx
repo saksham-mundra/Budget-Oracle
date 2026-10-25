@@ -1,875 +1,116 @@
 'use client';
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { getDefaultVendors, Vendor, X402_TESTNET_VENDOR } from '@/lib/vendors';
-import { routeQuestion, RouteDecision } from '@/lib/router';
-import { runAgent, AgentResult, AgentLogEntry } from '@/lib/agent';
-import { ReportResponse, buildVerdictLine } from '@/lib/report';
-import { purchaseFromPaidSource, BASE_SEPOLIA_EXPLORER_URL } from '@/lib/purchase';
-import { WalletConnect } from '@/components/WalletConnect';
-import { VendorTable } from '@/components/VendorTable';
-import { CompareChart } from '@/components/CompareChart';
+import React, { useState } from 'react';
+import Link from 'next/link';
+import { LandingNavbar } from '@/components/landing/LandingNavbar';
+import { LandingHero } from '@/components/landing/LandingHero';
+import { LandingGaps } from '@/components/landing/LandingGaps';
+import { LandingLoop } from '@/components/landing/LandingLoop';
+import { LandingPayoff } from '@/components/landing/LandingPayoff';
+import { LandingArchitecture } from '@/components/landing/LandingArchitecture';
+import { LandingWhy } from '@/components/landing/LandingWhy';
 import { HonestStatusPanel } from '@/components/HonestStatusPanel';
 
-interface HistoryItem {
-  id: string;
-  timestamp: string;
-  question: string;
-  budgetUsd: number;
-  finalProbability: number;
-  stopReason: string;
-  route: string;
-}
+export default function BudgetOracleLandingPage() {
+  const [, setWalletAddress] = useState<string | null>(null);
+  const [, setIsSepolia] = useState<boolean>(false);
 
-export default function BudgetOraclePage() {
-  // Input Panel State
-  const [question, setQuestion] = useState<string>(
-    'Will the Harbor Bridge reopen before December?'
-  );
-  const [budgetUsd, setBudgetUsd] = useState<number>(0.5);
-  const [detailedReport, setDetailedReport] = useState<boolean>(false);
-  const [payRealAgentsWithWallet, setPayRealAgentsWithWallet] = useState<boolean>(false);
-
-  // Vendors state
-  const [vendors, setVendors] = useState<Vendor[]>(() => {
-    const list = getDefaultVendors();
-    // Include the real testnet vendor in the list as well
-    return [...list, { ...X402_TESTNET_VENDOR }];
-  });
-
-  // Wallet state
-  const [walletAddress, setWalletAddress] = useState<string | null>(null);
-  const [isBaseSepolia, setIsBaseSepolia] = useState<boolean>(false);
-
-  // Execution states
-  const [agentResult, setAgentResult] = useState<AgentResult | null>(null);
-  const [reportResult, setReportResult] = useState<ReportResponse | null>(null);
-  const [isLoadingReport, setIsLoadingReport] = useState<boolean>(false);
-  const [isPurchasingOnChain, setIsPurchasingOnChain] = useState<boolean>(false);
-  const [paymentStatusMsg, setPaymentStatusMsg] = useState<string | null>(null);
-
-  // Compare results ($0.10, $0.50, $1.00)
-  const [compareResults, setCompareResults] = useState<
-    { budget: number; result: AgentResult }[] | null
-  >(null);
-
-  // Run History (in-memory only, max 5)
-  const [runHistory, setRunHistory] = useState<HistoryItem[]>([]);
-
-  // System environment status (client-safe reflection)
-  const jevModeLabel = 'Jev: simulated'; // Default simulated mode
-  const x402StatusLabel = isBaseSepolia
-    ? 'x402: Base Sepolia (Connected)'
-    : 'x402: Base Sepolia Testnet';
-
-  // Preset Questions
-  const presets = [
-    {
-      label: 'Bridge',
-      query: 'Will the Harbor Bridge reopen before December?',
-    },
-    {
-      label: 'Sales',
-      query: 'Will Q4 enterprise software sales exceed projections?',
-    },
-    {
-      label: 'Open question',
-      query:
-        'Why did global container freight rates fluctuate in Q3 and how will shipping capacity adapt?',
-    },
-  ];
-
-  // Router evaluation (pure code, live reactive)
-  const routerDecision: RouteDecision = useMemo(() => {
-    return routeQuestion(question, detailedReport);
-  }, [question, detailedReport]);
-
-  // Execute Agent
-  const handleRunAgent = useCallback(async () => {
-    if (!question.trim()) return;
-
-    setPaymentStatusMsg(null);
-
-    // 1. Run deterministic spending agent logic
-    let result = runAgent(question.trim(), budgetUsd, vendors);
-
-    // 2. Real x402 Flow: User connects wallet, pays out of wallet directly to agents
-    if (payRealAgentsWithWallet && walletAddress && isBaseSepolia && result.buys.length > 0) {
-      setIsPurchasingOnChain(true);
-      setPaymentStatusMsg(
-        'MetaMask Prompt: Confirm the x402 micropayment to pay the data provider agent directly on Base Sepolia...'
-      );
-
-      try {
-        const topBuy = result.buys[0];
-        const targetVendor = vendors.find((v) => v.id === topBuy.vendorId) || {
-          id: topBuy.vendorId,
-          name: topBuy.vendorName,
-          agentAddress: '0x845321042E94b15998a6B6002fD4B171eA41E1C5',
-        };
-
-        const purchaseOutcome = await purchaseFromPaidSource(
-          topBuy.priceUsd,
-          0,
-          budgetUsd,
-          walletAddress,
-          targetVendor
-        );
-
-        if (purchaseOutcome.success && purchaseOutcome.txHash) {
-          setPaymentStatusMsg(
-            `Payment settled on Base Sepolia! Tx: ${purchaseOutcome.txHash.slice(0, 10)}... (Funds paid directly from your wallet to Agent)`
-          );
-
-          // Update buy entry with real testnet on-chain proof
-          const updatedBuys = result.buys.map((b, idx) => {
-            if (idx === 0) {
-              return {
-                ...b,
-                sourceType: 'real_testnet' as const,
-                txRef: purchaseOutcome.txHash,
-              };
-            }
-            return b;
-          });
-
-          const updatedLog = result.log.map((entry) => {
-            if (entry.type === 'buy' && entry.vendorId === topBuy.vendorId) {
-              return {
-                ...entry,
-                sourceType: 'real_testnet' as const,
-                txRef: purchaseOutcome.txHash,
-              };
-            }
-            return entry;
-          });
-
-          result = {
-            ...result,
-            buys: updatedBuys,
-            log: updatedLog,
-          };
-        } else {
-          setPaymentStatusMsg(
-            purchaseOutcome.message ||
-              'Payment not completed in wallet. Fell back safely to simulated intelligence.'
-          );
-        }
-      } catch (payErr: unknown) {
-        const msg = payErr instanceof Error ? payErr.message : 'Wallet transaction error';
-        setPaymentStatusMsg(`Wallet note: ${msg}. Retaining reserve and using simulated data.`);
-      } finally {
-        setIsPurchasingOnChain(false);
-      }
+  const scrollToSection = (id: string) => {
+    const el = document.getElementById(id);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth' });
     }
-
-    setAgentResult(result);
-
-    // 3. Add to in-memory run history (max 5 items)
-    setRunHistory((prev) => {
-      const newItem: HistoryItem = {
-        id: `run-${Date.now()}`,
-        timestamp: new Date().toLocaleTimeString(),
-        question: question.trim(),
-        budgetUsd,
-        finalProbability: result.final,
-        stopReason: result.stopReason,
-        route: routerDecision.route,
-      };
-      return [newItem, ...prev].slice(0, 5);
-    });
-
-    // 4. Generate report via server route (Gemma 4)
-    setIsLoadingReport(true);
-    setReportResult(null);
-
-    try {
-      const res = await fetch('/api/report', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          question: question.trim(),
-          route: routerDecision.route,
-          tokenCap: routerDecision.tokenCap,
-          finalProbability: result.final,
-          buys: result.buys,
-          stopReason: result.stopReason,
-        }),
-      });
-
-      if (res.ok) {
-        const data: ReportResponse = await res.json();
-        setReportResult(data);
-      } else {
-        setReportResult({
-          verdictLine: buildVerdictLine(result.final),
-          reportText: 'Failed to communicate with report generation service.',
-          status: 'unavailable',
-          engineUsed: 'Server error',
-        });
-      }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Unknown network error';
-      setReportResult({
-        verdictLine: buildVerdictLine(result.final),
-        reportText: `Writer service error: ${msg}`,
-        status: 'unavailable',
-        engineUsed: 'Network error',
-      });
-    } finally {
-      setIsLoadingReport(false);
-    }
-  }, [question, budgetUsd, vendors, routerDecision, payRealAgentsWithWallet, walletAddress, isBaseSepolia]);
-
-  // Run on initial page mount with default question and budget
-  useEffect(() => {
-    handleRunAgent();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Compare across 3 budgets ($0.10, $0.50, $1.00)
-  const handleCompare = () => {
-    if (!question.trim()) return;
-    const testBudgets = [0.1, 0.5, 1.0];
-    const results = testBudgets.map((b) => ({
-      budget: b,
-      result: runAgent(question.trim(), b, vendors),
-    }));
-    setCompareResults(results);
   };
-
-  // Download Log File
-  const handleDownloadLog = () => {
-    if (!agentResult) return;
-
-    const logLines = [
-      '=================================================================',
-      'BUDGET ORACLE — ALGORITHMIC AUDIT LOG',
-      '=================================================================',
-      `Generated At:        ${new Date().toISOString()}`,
-      `Research Question:   "${agentResult.question}"`,
-      `Total Budget:        $${agentResult.budgetUsd.toFixed(3)} USD`,
-      `Protected Reserve:   $${agentResult.reserveUsd.toFixed(3)} USD (10%)`,
-      `Spent USD:           $${agentResult.spentUsd.toFixed(3)} USD`,
-      `Unspent USD:         $${agentResult.unspentUsd.toFixed(3)} USD`,
-      `Prior Probability:   ${(agentResult.prior * 100).toFixed(1)}% YES`,
-      `Final Probability:   ${(agentResult.final * 100).toFixed(1)}% YES`,
-      `Acquisition Result:  ${agentResult.stopReason}`,
-      `User Payer Wallet:   ${walletAddress || 'Not connected'}`,
-      '',
-      '-----------------------------------------------------------------',
-      'ROUTER DECISION (PURE CODE ENGINE)',
-      '-----------------------------------------------------------------',
-      `Score:               ${routerDecision.score}`,
-      `Complexity Level:    ${routerDecision.level.toUpperCase()}`,
-      `Yes/No Type:         ${routerDecision.yesNo ? 'YES/NO' : 'OPEN-ENDED'}`,
-      `Assigned Route:      Route ${routerDecision.route}`,
-      `Writer Token Cap:    ${routerDecision.tokenCap}`,
-      '',
-      '-----------------------------------------------------------------',
-      'AGENT EXECUTION LOG (DETAILED STEP-BY-STEP)',
-      '-----------------------------------------------------------------',
-      ...agentResult.log.map((entry, idx) => {
-        if (entry.type === 'buy') {
-          return `Step ${idx + 1}: [BUY] ${entry.vendorName}
-  Cost:           $${entry.priceUsd.toFixed(3)} USD
-  Delta:          ${entry.delta > 0 ? '+' : ''}${entry.delta}
-  Before:         ${((entry.before ?? 0) * 100).toFixed(1)}%
-  After:          ${((entry.after ?? 0) * 100).toFixed(1)}%
-  Shift:          ${entry.shiftPoints?.toFixed(2)} pts (${entry.perCent?.toFixed(2)} pts/cent)
-  Tx Reference:   ${entry.txRef} (${entry.sourceType})`;
-        } else {
-          return `Step ${idx + 1}: [BLOCKED] ${entry.vendorName}
-  Cost:           $${entry.priceUsd.toFixed(3)} USD
-  Reason:         ${entry.reason}`;
-        }
-      }),
-      '',
-      '-----------------------------------------------------------------',
-      'SYNTHESIS REPORT',
-      '-----------------------------------------------------------------',
-      buildVerdictLine(agentResult.final),
-      reportResult?.reportText ? reportResult.reportText : '(No writer report generated)',
-      '=================================================================',
-      'Honesty Verification: Jev=simulated, x402=Base Sepolia testnet',
-      'Limitations are part of the proof.',
-      '=================================================================',
-    ];
-
-    const blob = new Blob([logLines.join('\n')], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `budget-oracle-log-${Date.now()}.txt`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
-  const hasRealDataUsed = agentResult?.buys.some((b) => b.sourceType === 'real_testnet');
 
   return (
-    <main className="w-full min-h-screen bg-black text-[#f4f4f0] px-4 py-8">
-      {/* Responsive single column container, max width 760px */}
-      <div className="max-w-[760px] mx-auto space-y-6">
-        {/* ========================================================
-            1. HEADER SECTION
-        ======================================================== */}
-        <header className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 pb-4 border-b border-[#2a2a2a]">
-          <div>
-            <div className="flex items-center gap-2 mb-1.5">
-              <span className="px-2 py-0.5 text-[10px] uppercase font-bold tracking-wider rounded bg-[#ccff4d]/15 text-[#ccff4d] border border-[#ccff4d]/30">
-                Simulated prototype
-              </span>
-              <span className="px-2 py-0.5 text-[10px] uppercase font-bold tracking-wider rounded bg-[#222222] text-[#9a9a94] border border-[#333333]">
-                Testnet Active
-              </span>
-            </div>
-            <h1 className="text-3xl sm:text-4xl font-serif font-bold text-[#f4f4f0] tracking-tight">
-              Budget Oracle
-            </h1>
-            <p className="text-sm text-[#9a9a94] mt-1">
-              An agent that buys evidence only when it is worth the price.
-            </p>
+    <div className="w-full min-h-screen bg-black text-[#f4f4f0] selection:bg-[#ccff4d] selection:text-black">
+      {/* 1. STICKY TOP NAVBAR */}
+      <LandingNavbar
+        onAddressChange={setWalletAddress}
+        onNetworkChange={setIsSepolia}
+      />
+
+      {/* 2. HERO SECTION (SLIDE 01: HACKATHON PROTOTYPE) */}
+      <LandingHero
+        onExploreGaps={() => scrollToSection('gaps')}
+      />
+
+      {/* 3. THE 3 GAPS SECTION (SLIDE 02: THE GAP) */}
+      <LandingGaps />
+
+      {/* 4. THE 4-STEP ANALYTICAL LOOP (SLIDE 03: THE LOOP) */}
+      <LandingLoop />
+
+      {/* 5. DIMINISHING RETURNS DEMO PAYOFF (SLIDE 04: THE DEMO PAYOFF) */}
+      <LandingPayoff />
+
+      {/* 6. ROUTING & INVARIANT PIPELINE ARCHITECTURE (SLIDE 05: ARCHITECTURE) */}
+      <LandingArchitecture />
+
+      {/* 7. WHY THIS ARCHITECTURE? (SLIDE 06: WHY THIS ARCHITECTURE) */}
+      <LandingWhy />
+
+      {/* 8. CALL TO ACTION TO DEDICATED LIVE CONSOLE */}
+      <section className="py-20 border-t border-[#222222] bg-[#070707] relative overflow-hidden">
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[300px] bg-[#ccff4d]/8 rounded-full blur-[140px] pointer-events-none -z-10" />
+
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center space-y-6">
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#111111] border border-[#2a2a2a] text-xs font-mono text-[#ccff4d]">
+            <span className="w-2 h-2 rounded-full bg-[#ccff4d] animate-pulse-subtle" />
+            <span>DEDICATED RESEARCH TERMINAL</span>
           </div>
 
-          <WalletConnect
-            onAddressChange={setWalletAddress}
-            onNetworkChange={setIsBaseSepolia}
-          />
-        </header>
+          <h2 className="text-3xl sm:text-5xl font-serif font-bold text-[#f4f4f0] tracking-tight">
+            Ready to test the autonomous research agent?
+          </h2>
 
-        {/* ========================================================
-            2. INPUT PANEL SECTION
-        ======================================================== */}
-        <section className="bg-[#111111] border border-[#2a2a2a] rounded-lg p-5 space-y-4">
-          <div>
-            <label
-              htmlFor="question-input"
-              className="block text-xs font-serif font-semibold text-[#f4f4f0] mb-1.5"
+          <p className="text-sm sm:text-base text-[#9a9a94] max-w-2xl mx-auto leading-relaxed">
+            Launch the dedicated interactive terminal to run live research queries, inspect pure-code
+            routing decisions, verify Bayesian updates, and execute x402 on-chain testnet micropayments
+            directly on Ethereum Sepolia.
+          </p>
+
+          <div className="pt-2">
+            <Link
+              href="/terminal"
+              className="inline-flex items-center gap-2 px-8 py-4 bg-[#ccff4d] hover:bg-[#b8f037] text-black font-semibold text-sm rounded-full shadow-[0_0_30px_rgba(204,255,77,0.35)] transition transform hover:-translate-y-0.5 cursor-pointer"
             >
-              Research Question (Yes/No or Open-Ended)
-            </label>
-            <input
-              id="question-input"
-              type="text"
-              value={question}
-              onChange={(e) => setQuestion(e.target.value)}
-              placeholder="e.g. Will the Harbor Bridge reopen before December?"
-              className="w-full px-3.5 py-2.5 bg-black border border-[#2a2a2a] text-[#f4f4f0] rounded text-sm placeholder-[#9a9a94]/50 focus:border-[#ccff4d] transition"
-            />
+              <span>Open Live Research Terminal</span>
+              <span className="font-mono text-base">→</span>
+            </Link>
           </div>
+        </div>
+      </section>
 
-          {/* Preset Buttons */}
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs text-[#9a9a94]">Presets:</span>
-            {presets.map((p) => (
-              <button
-                key={p.label}
-                onClick={() => setQuestion(p.query)}
-                className="px-2.5 py-1 bg-black hover:bg-[#1f1f1f] border border-[#2a2a2a] hover:border-[#ccff4d] text-xs text-[#f4f4f0] rounded transition cursor-pointer"
-              >
-                {p.label}
-              </button>
-            ))}
+      {/* 9. HONEST ARCHITECTURE STATUS AUDIT */}
+      <section className="py-16 border-t border-[#222222] bg-black">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 space-y-4">
+          <HonestStatusPanel />
+        </div>
+      </section>
+
+      {/* 10. SLIDE 07: THANK YOU & CLOSING BANNER */}
+      <section className="py-24 border-t border-[#222222] bg-[#050505] text-center relative overflow-hidden">
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[300px] bg-[#ccff4d]/5 rounded-full blur-[130px] pointer-events-none -z-10" />
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 space-y-6">
+          <div className="w-12 h-12 mx-auto rounded-full bg-[#111111] border border-[#2a2a2a] flex items-center justify-center text-xl text-[#ccff4d] shadow-[0_0_20px_rgba(204,255,77,0.2)] animate-pulse-subtle">
+            ☺
           </div>
-
-          {/* Dynamic Flow: User Wallet -> Agent x402 Payment Option */}
-          <div className="p-3 bg-black/60 border border-[#2a2a2a] rounded space-y-1.5">
-            <label className="flex items-start gap-2.5 text-xs text-[#f4f4f0] cursor-pointer">
-              <input
-                type="checkbox"
-                checked={payRealAgentsWithWallet}
-                onChange={(e) => setPayRealAgentsWithWallet(e.target.checked)}
-                className="w-4 h-4 mt-0.5 rounded bg-black border-[#2a2a2a] text-[#ccff4d] accent-[#ccff4d] cursor-pointer"
-              />
-              <div className="flex-1">
-                <div className="flex items-center justify-between">
-                  <span className="font-semibold text-[#f4f4f0]">
-                    Pay Data Provider Agents via x402 (from connected wallet)
-                  </span>
-                  <span
-                    className={`px-1.5 py-0.2 text-[9px] uppercase font-bold tracking-wider rounded ${
-                      payRealAgentsWithWallet && walletAddress && isBaseSepolia
-                        ? 'bg-[#ccff4d]/15 text-[#ccff4d] border border-[#ccff4d]/40'
-                        : 'bg-[#222222] text-[#9a9a94] border border-[#333333]'
-                    }`}
-                  >
-                    {payRealAgentsWithWallet && walletAddress && isBaseSepolia
-                      ? 'DIRECT AGENT SETTLEMENT'
-                      : 'SIMULATED'}
-                  </span>
-                </div>
-                <p className="text-[11px] text-[#9a9a94] mt-0.5">
-                  {walletAddress
-                    ? `Payments will flow directly from your wallet (${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}) to the data provider agent's wallet on Base Sepolia.`
-                    : 'Connect MetaMask on Base Sepolia to pay data provider agents directly for on-chain evidence.'}
-                </p>
-              </div>
-            </label>
-          </div>
-
-          <div className="flex flex-wrap items-center justify-between gap-4 pt-2 border-t border-[#1f1f1f]">
-            {/* Budget Input */}
-            <div className="flex items-center gap-2">
-              <label htmlFor="budget-input" className="text-xs text-[#9a9a94] font-medium">
-                USD Budget:
-              </label>
-              <div className="flex items-center gap-1">
-                <span className="text-sm font-mono text-[#ccff4d]">$</span>
-                <input
-                  id="budget-input"
-                  type="number"
-                  min="0.01"
-                  step="0.05"
-                  value={budgetUsd}
-                  onChange={(e) =>
-                    setBudgetUsd(Math.max(0.01, parseFloat(e.target.value) || 0.01))
-                  }
-                  className="w-24 px-2 py-1.5 bg-black border border-[#2a2a2a] focus:border-[#ccff4d] text-[#f4f4f0] rounded text-sm font-mono"
-                />
-              </div>
-            </div>
-
-            {/* Detailed report checkbox */}
-            <label className="flex items-center gap-2 text-xs text-[#f4f4f0] cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={detailedReport}
-                onChange={(e) => setDetailedReport(e.target.checked)}
-                className="w-4 h-4 rounded bg-black border-[#2a2a2a] text-[#ccff4d] accent-[#ccff4d] cursor-pointer"
-              />
-              <span>Detailed report (Routes to Route B/C)</span>
-            </label>
-          </div>
-
-          {/* Action Buttons */}
-          <div className="flex flex-wrap items-center gap-3 pt-2">
-            <button
-              id="run-agent-btn"
-              onClick={handleRunAgent}
-              disabled={isPurchasingOnChain}
-              className="px-5 py-2.5 bg-[#ccff4d] hover:bg-[#b8f037] text-black font-semibold text-sm rounded shadow transition cursor-pointer disabled:opacity-50"
-            >
-              {isPurchasingOnChain ? 'Signing in Wallet...' : 'Run Agent'}
-            </button>
-            <button
-              id="compare-btn"
-              onClick={handleCompare}
-              className="px-4 py-2.5 bg-black hover:bg-[#1a1a1a] border border-[#2a2a2a] hover:border-[#ccff4d] text-[#f4f4f0] text-sm font-medium rounded transition cursor-pointer"
-            >
-              Compare ($0.10, $0.50, $1.00)
-            </button>
-          </div>
-
-          {paymentStatusMsg && (
-            <div className="p-2.5 bg-[#161616] border border-[#2a2a2a] rounded text-xs text-[#ccff4d] font-mono animate-fadeIn">
-              {paymentStatusMsg}
-            </div>
-          )}
-        </section>
-
-        {/* ========================================================
-            3. STATUS BADGES SECTION
-        ======================================================== */}
-        <section className="flex flex-wrap items-center gap-2 text-xs">
-          <div className="px-2.5 py-1 bg-[#111111] border border-[#2a2a2a] rounded flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-[#ccff4d]" />
-            <span className="text-[#9a9a94]">Jev:</span>
-            <span className="font-mono text-[#f4f4f0]">{jevModeLabel}</span>
-          </div>
-
-          <div className="px-2.5 py-1 bg-[#111111] border border-[#2a2a2a] rounded flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-[#ccff4d]" />
-            <span className="text-[#9a9a94]">Writer:</span>
-            <span className="font-mono text-[#f4f4f0]">
-              Gemma 4 (Google Gen AI)
-            </span>
-          </div>
-
-          <div className="px-2.5 py-1 bg-[#111111] border border-[#2a2a2a] rounded flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-[#ccff4d]" />
-            <span className="text-[#9a9a94]">x402:</span>
-            <span className="font-mono text-[#f4f4f0]">{x402StatusLabel}</span>
-          </div>
-
-          <div className="px-2.5 py-1 bg-[#111111] border border-[#2a2a2a] rounded flex items-center gap-1.5">
-            <span
-              className={`w-2 h-2 rounded-full ${
-                walletAddress ? 'bg-[#ccff4d]' : 'bg-[#9a9a94]'
-              }`}
-            />
-            <span className="text-[#9a9a94]">Payer:</span>
-            <span className="font-mono text-[#f4f4f0]">
-              {walletAddress
-                ? `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`
-                : 'Not connected'}
-            </span>
-          </div>
-        </section>
-
-        {/* ========================================================
-            4. ROUTER PANEL SECTION
-        ======================================================== */}
-        <section className="bg-[#111111] border border-[#2a2a2a] rounded-lg p-4">
-          <div className="flex items-center justify-between mb-2">
-            <h2 className="text-xs uppercase font-serif font-bold tracking-wider text-[#9a9a94]">
-              Router Decision (Pure Code Engine)
-            </h2>
-            <span className="px-2 py-0.5 text-[11px] font-bold font-mono rounded bg-black border border-[#2a2a2a] text-[#ccff4d]">
-              Route {routerDecision.route}
-            </span>
-          </div>
-
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-xs">
-            <div className="bg-black/50 p-2.5 rounded border border-[#1f1f1f]">
-              <div className="text-[10px] text-[#9a9a94] uppercase">Score</div>
-              <div className="font-mono text-sm font-bold text-[#f4f4f0]">
-                {routerDecision.score}
-              </div>
-            </div>
-
-            <div className="bg-black/50 p-2.5 rounded border border-[#1f1f1f]">
-              <div className="text-[10px] text-[#9a9a94] uppercase">Level</div>
-              <div className="font-mono text-sm font-semibold capitalize text-[#f4f4f0]">
-                {routerDecision.level}
-              </div>
-            </div>
-
-            <div className="bg-black/50 p-2.5 rounded border border-[#1f1f1f]">
-              <div className="text-[10px] text-[#9a9a94] uppercase">Question Type</div>
-              <div className="font-mono text-sm font-semibold text-[#f4f4f0]">
-                {routerDecision.yesNo ? 'Yes/No' : 'Open'}
-              </div>
-            </div>
-
-            <div className="bg-black/50 p-2.5 rounded border border-[#1f1f1f]">
-              <div className="text-[10px] text-[#9a9a94] uppercase">Assigned Route</div>
-              <div className="font-mono text-sm font-bold text-[#ccff4d]">
-                Route {routerDecision.route}
-              </div>
-            </div>
-
-            <div className="bg-black/50 p-2.5 rounded border border-[#1f1f1f]">
-              <div className="text-[10px] text-[#9a9a94] uppercase">Token Cap</div>
-              <div className="font-mono text-sm font-bold text-[#f4f4f0]">
-                {routerDecision.tokenCap} tokens
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* ========================================================
-            5. WHAT THE AGENT DID SECTION
-        ======================================================== */}
-        {agentResult && (
-          <section className="bg-[#111111] border border-[#2a2a2a] rounded-lg p-5 space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-[#1f1f1f]">
-              <h2 className="text-base font-serif font-bold text-[#f4f4f0]">
-                What the Agent Did
-              </h2>
-              <div className="flex items-center gap-3 text-xs font-mono">
-                <span className="text-[#9a9a94]">
-                  Prior:{' '}
-                  <span className="text-[#f4f4f0]">
-                    {(agentResult.prior * 100).toFixed(1)}%
-                  </span>
-                </span>
-                <span className="text-[#9a9a94]">
-                  Budget:{' '}
-                  <span className="text-[#f4f4f0]">
-                    ${agentResult.budgetUsd.toFixed(2)}
-                  </span>
-                </span>
-                <span className="text-[#9a9a94]">
-                  Reserve (10%):{' '}
-                  <span className="text-[#ee86bd]">
-                    ${agentResult.reserveUsd.toFixed(3)}
-                  </span>
-                </span>
-              </div>
-            </div>
-
-            {/* Log Entry Cards */}
-            <div className="space-y-2.5">
-              {agentResult.log.map((entry, index) => {
-                const isBuy = entry.type === 'buy';
-                const isReal = entry.sourceType === 'real_testnet';
-
-                return (
-                  <div
-                    key={entry.id || index}
-                    className={`p-3.5 rounded border text-xs transition ${
-                      isBuy
-                        ? 'bg-black/70 border-[#2a2a2a]'
-                        : 'bg-black/30 border-[#1f1f1f]'
-                    }`}
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
-                      <div className="flex items-center gap-2">
-                        <span
-                          className={`px-1.5 py-0.5 font-mono text-[10px] font-bold rounded uppercase ${
-                            isBuy
-                              ? 'bg-[#ccff4d]/20 text-[#ccff4d] border border-[#ccff4d]/40'
-                              : 'bg-[#ee86bd]/15 text-[#ee86bd] border border-[#ee86bd]/30'
-                          }`}
-                        >
-                          {isBuy ? 'BOUGHT' : 'BLOCKED'}
-                        </span>
-                        <span className="font-semibold text-sm text-[#f4f4f0]">
-                          {entry.vendorName}
-                        </span>
-                        <span className="text-[#9a9a94] font-mono">
-                          (${entry.priceUsd.toFixed(3)})
-                        </span>
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        <span
-                          className={`px-2 py-0.5 text-[10px] uppercase font-bold rounded ${
-                            isReal
-                              ? 'bg-[#ccff4d]/10 text-[#ccff4d] border border-[#ccff4d]'
-                              : 'bg-[#1f1f1f] text-[#9a9a94]'
-                          }`}
-                        >
-                          {isReal ? 'REAL (testnet)' : 'SIMULATED'}
-                        </span>
-                      </div>
-                    </div>
-
-                    {isBuy ? (
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-[#1f1f1f] text-[#9a9a94]">
-                        <div>
-                          <span>Shift: </span>
-                          <span className="text-[#f4f4f0] font-mono">
-                            {((entry.before ?? 0) * 100).toFixed(1)}% →{' '}
-                            {((entry.after ?? 0) * 100).toFixed(1)}%
-                          </span>
-                        </div>
-                        <div>
-                          <span>Efficiency: </span>
-                          <span className="text-[#ccff4d] font-mono font-bold">
-                            {entry.perCent?.toFixed(2)} pts/¢
-                          </span>
-                        </div>
-                        <div className="col-span-2 truncate">
-                          <span>Tx Ref: </span>
-                          {isReal && entry.txRef?.startsWith('0x') ? (
-                            <a
-                              href={`${BASE_SEPOLIA_EXPLORER_URL}/tx/${entry.txRef}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="font-mono text-[#ccff4d] underline text-[11px] hover:text-[#b8f037]"
-                              title="View on Base Sepolia Explorer"
-                            >
-                              {entry.txRef.slice(0, 14)}... ↗
-                            </a>
-                          ) : (
-                            <span className="font-mono text-[#f4f4f0] text-[11px]">
-                              {entry.txRef}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    ) : (
-                      <p className="text-[#9a9a94] italic text-[11px] pt-1">
-                        Reason: {entry.reason}
-                      </p>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* ========================================================
-                6. STOP BADGE SECTION
-            ======================================================== */}
-            <div className="mt-4 pt-3 border-t border-[#1f1f1f] flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="px-2.5 py-1 bg-[#ee86bd]/20 border border-[#ee86bd] text-[#ee86bd] text-xs font-bold font-mono uppercase tracking-wider rounded">
-                  STOP
-                </span>
-                <span className="text-xs text-[#f4f4f0] font-medium">
-                  {agentResult.stopReason}
-                </span>
-              </div>
-            </div>
-          </section>
-        )}
-
-        {/* ========================================================
-            7. RESULT SECTION
-        ======================================================== */}
-        {agentResult && (
-          <section className="bg-[#111111] border border-[#2a2a2a] rounded-lg p-6 text-center space-y-2">
-            <div
-              className={`inline-block px-2.5 py-0.5 text-[10px] uppercase font-bold tracking-wider rounded ${
-                hasRealDataUsed
-                  ? 'bg-[#ccff4d]/10 text-[#ccff4d] border border-[#ccff4d]'
-                  : 'bg-[#222222] text-[#9a9a94] border border-[#333333]'
-              }`}
-            >
-              {hasRealDataUsed ? 'Real data used (on-chain settled)' : 'Simulated'}
-            </div>
-
-            <div className="text-5xl sm:text-6xl font-serif font-extrabold text-[#ccff4d] tracking-tight">
-              {(agentResult.final * 100).toFixed(1)}% YES
-            </div>
-
-            <p className="text-xs text-[#9a9a94] font-mono">
-              Spent ${agentResult.spentUsd.toFixed(3)} of ${agentResult.budgetUsd.toFixed(2)}, unspent ${agentResult.unspentUsd.toFixed(3)}
-            </p>
-          </section>
-        )}
-
-        {/* ========================================================
-            8. REPORT SECTION
-        ======================================================== */}
-        {agentResult && (
-          <section className="bg-[#111111] border border-[#2a2a2a] rounded-lg p-5 space-y-3">
-            <div className="flex items-center justify-between pb-2 border-b border-[#1f1f1f]">
-              <h2 className="text-sm uppercase font-serif font-bold tracking-wider text-[#9a9a94]">
-                Synthesis Report
-              </h2>
-              {isLoadingReport && (
-                <span className="text-xs text-[#ccff4d] animate-pulse">
-                  Synthesizing with Gemma 4...
-                </span>
-              )}
-            </div>
-
-            {/* Verdict line built by code only */}
-            <div className="text-base font-serif font-bold text-[#f4f4f0]">
-              {buildVerdictLine(agentResult.final)}
-            </div>
-
-            {/* AI Writer Output or Status */}
-            {isLoadingReport ? (
-              <p className="text-xs text-[#9a9a94] italic">
-                Calling Gemma 4 API (Route {routerDecision.route}, token cap {routerDecision.tokenCap})...
-              </p>
-            ) : reportResult?.status === 'discarded' ? (
-              <div className="p-3 bg-[#ee86bd]/10 border border-[#ee86bd] rounded text-xs text-[#ee86bd]">
-                {reportResult.discardNote || 'Writer output discarded: it contained a conflicting number.'}
-              </div>
-            ) : reportResult?.reportText ? (
-              <div className="text-xs text-[#f4f4f0] leading-relaxed whitespace-pre-wrap font-sans bg-black/40 p-3.5 rounded border border-[#1f1f1f]">
-                {reportResult.reportText}
-              </div>
-            ) : routerDecision.route === 'A' ? (
-              <p className="text-xs text-[#9a9a94] italic">
-                Route A (token cap 0): Jev evaluation only, writer call bypassed by design.
-              </p>
-            ) : (
-              <p className="text-xs text-[#9a9a94] italic">
-                Writer unavailable: add your API key to .env.local
-              </p>
-            )}
-          </section>
-        )}
-
-        {/* ========================================================
-            9. DOWNLOAD LOG BUTTON SECTION
-        ======================================================== */}
-        {agentResult && (
-          <div className="flex justify-end">
-            <button
-              id="download-log-btn"
-              onClick={handleDownloadLog}
-              className="px-4 py-2 bg-[#111111] hover:bg-[#1a1a1a] border border-[#2a2a2a] hover:border-[#ccff4d] text-xs font-medium text-[#f4f4f0] rounded transition flex items-center gap-2 cursor-pointer"
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="w-4 h-4 text-[#ccff4d]"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
-                />
-              </svg>
-              Download Audit Log (.txt)
-            </button>
-          </div>
-        )}
-
-        {/* ========================================================
-            10. COMPARE CHART SECTION
-        ======================================================== */}
-        {compareResults && <CompareChart results={compareResults} />}
-
-        {/* ========================================================
-            11. RUN HISTORY SECTION (IN-MEMORY ONLY)
-        ======================================================== */}
-        <section className="bg-[#111111] border border-[#2a2a2a] rounded-lg p-5">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-sm uppercase font-serif font-bold tracking-wider text-[#9a9a94]">
-              Run History (Last 5 In-Memory)
-            </h2>
-            <span className="text-[10px] text-[#9a9a94]">Session only (no localStorage)</span>
-          </div>
-
-          {runHistory.length === 0 ? (
-            <p className="text-xs text-[#9a9a94] italic">No runs executed yet.</p>
-          ) : (
-            <div className="space-y-2">
-              {runHistory.map((item, idx) => (
-                <div
-                  key={item.id}
-                  className="flex items-center justify-between p-2.5 bg-black/60 border border-[#1f1f1f] rounded text-xs"
-                >
-                  <div className="flex items-center gap-2 truncate mr-2">
-                    <span className="text-[#9a9a94] font-mono">#{idx + 1}</span>
-                    <span className="text-[#f4f4f0] truncate max-w-[320px]">
-                      {item.question}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-3 shrink-0 font-mono">
-                    <span className="text-[#9a9a94]">${item.budgetUsd.toFixed(2)}</span>
-                    <span className="font-bold text-[#ccff4d]">
-                      {(item.finalProbability * 100).toFixed(1)}% YES
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-
-        {/* ========================================================
-            12. FICTIONAL DATA SOURCES TABLE SECTION
-        ======================================================== */}
-        <VendorTable
-          vendors={vendors}
-          onChange={setVendors}
-          onReset={() => {
-            const list = getDefaultVendors();
-            setVendors([...list, { ...X402_TESTNET_VENDOR }]);
-          }}
-        />
-
-        {/* ========================================================
-            13. HONEST STATUS PANEL SECTION
-        ======================================================== */}
-        <HonestStatusPanel />
-
-        {/* ========================================================
-            14. FOOTER SECTION
-        ======================================================== */}
-        <footer className="text-center py-8 text-xs text-[#9a9a94] border-t border-[#2a2a2a]">
-          <p className="font-serif italic text-sm text-[#f4f4f0] mb-1">
+          <h2 className="text-4xl sm:text-6xl font-serif font-bold text-[#f4f4f0] tracking-tight">
+            Thank You!
+          </h2>
+          <p className="text-base text-[#9a9a94] font-medium tracking-wide">
+            For your time and attention.
+          </p>
+          <div className="w-24 h-0.5 mx-auto bg-gradient-to-r from-transparent via-[#ccff4d] to-transparent my-4" />
+          <p className="font-serif italic text-base text-[#ccff4d]">
             &ldquo;Limitations are part of the proof.&rdquo;
           </p>
-          <p className="text-[11px] text-[#9a9a94]">
-            Budget Oracle • Algorithmic Evidence Purchasing Agent • Next.js & Tailwind CSS
-          </p>
-        </footer>
-      </div>
-    </main>
+          <div className="pt-8 text-xs font-mono text-[#666666]">
+            Budget Oracle • Ethereum Sepolia Chain ID 11155111 • Next.js 16 (Turbopack) & Tailwind CSS v4
+          </div>
+        </div>
+      </section>
+    </div>
   );
 }
