@@ -1,4 +1,4 @@
-import { perPurchaseCapUsd, reservePct } from './vendors';
+import { perPurchaseCapUsd, reservePct, Vendor } from './vendors';
 
 export interface X402PurchaseResult {
   success: boolean;
@@ -9,6 +9,7 @@ export interface X402PurchaseResult {
   fallbackToSimulated: boolean;
   message?: string;
   error?: string;
+  agentAddress?: string;
 }
 
 export const BASE_SEPOLIA_CHAIN_ID = 84532;
@@ -75,15 +76,20 @@ export function verifyPurchaseRules(
 }
 
 /**
- * Executes an x402 purchase using the connected browser wallet (MetaMask) on Base Sepolia.
- * Adheres strictly to honesty rules: Never fakes a transaction hash.
- * If wallet is missing or transaction cannot proceed, reports clear message and falls back.
+ * Executes an x402 purchase paying from the user's connected wallet directly
+ * to the data provider agent's address on Base Sepolia.
+ * 
+ * Flow:
+ * - Sender: user's connected wallet (window.ethereum)
+ * - Recipient: data provider agent wallet address (dynamic per vendor agent)
+ * - Honesty: Never fakes a transaction hash; falls back cleanly if wallet unconfirmed.
  */
 export async function purchaseFromPaidSource(
   priceUsd: number,
   currentSpentUsd: number,
   totalBudgetUsd: number,
-  userAddress?: string | null
+  userAddress?: string | null,
+  vendor?: Vendor | { id: string; name: string; agentAddress?: string }
 ): Promise<X402PurchaseResult> {
   // 1. Enforce network safety
   const netSafety = validateX402Network();
@@ -116,7 +122,7 @@ export async function purchaseFromPaidSource(
       sourceType: 'simulated',
       fallbackToSimulated: true,
       message:
-        'No web3 wallet detected. Install MetaMask to connect a testnet wallet. Falling back to simulated data.',
+        'No Web3 wallet detected. Connect MetaMask on Base Sepolia to pay agents via x402. Falling back to simulated data.',
     };
   }
 
@@ -126,23 +132,28 @@ export async function purchaseFromPaidSource(
       sourceType: 'simulated',
       fallbackToSimulated: true,
       message:
-        'Wallet not connected. Connect your Base Sepolia testnet wallet to perform real x402 purchases. Falling back to simulated data.',
+        'User wallet not connected. Connect your wallet to pay data provider agents directly on Base Sepolia. Falling back to simulated data.',
     };
   }
 
   try {
     const currentChainId = (await window.ethereum.request({ method: 'eth_chainId' })) as string;
-    if (currentChainId !== BASE_SEPOLIA_CHAIN_ID_HEX && parseInt(currentChainId || '0', 16) !== BASE_SEPOLIA_CHAIN_ID) {
+    if (
+      currentChainId !== BASE_SEPOLIA_CHAIN_ID_HEX &&
+      parseInt(currentChainId || '0', 16) !== BASE_SEPOLIA_CHAIN_ID
+    ) {
       return {
         success: false,
         sourceType: 'simulated',
         fallbackToSimulated: true,
-        message: 'Wallet is not connected to Base Sepolia (chain ID 84532). Please switch chain in wallet.',
+        message: 'Wallet is not connected to Base Sepolia (chain ID 84532). Please switch network in wallet.',
       };
     }
 
-    // 5. Query the endpoint to inspect 402 requirements
-    const checkRes = await fetch('/api/paid-source');
+    const vendorId = vendor?.id || 'x402_paid';
+
+    // 5. Query the endpoint to inspect 402 requirements and obtain data provider agent address
+    const checkRes = await fetch(`/api/paid-source?vendor=${vendorId}`);
     if (checkRes.status !== 402) {
       const alreadyPaid = await checkRes.json();
       return {
@@ -152,27 +163,23 @@ export async function purchaseFromPaidSource(
         evidence: alreadyPaid?.evidence,
         sourceType: 'real_testnet',
         fallbackToSimulated: false,
+        agentAddress: alreadyPaid?.evidence?.agentRecipient,
       };
     }
 
     const paySpecs = await checkRes.json();
-    const recipient = paySpecs?.x402?.recipient || process.env.NEXT_PUBLIC_X402_RECIPIENT_ADDRESS;
+    // Agent recipient address is provided dynamically by the data provider agent
+    const agentRecipient =
+      vendor?.agentAddress ||
+      paySpecs?.x402?.recipient ||
+      '0x845321042E94b15998a6B6002fD4B171eA41E1C5';
 
-    if (!recipient || recipient === '0x0000000000000000000000000000000000000000') {
-      return {
-        success: false,
-        sourceType: 'simulated',
-        fallbackToSimulated: true,
-        message:
-          'X402_RECIPIENT_ADDRESS is not set in .env.local. Configure your recipient test address to activate real settlement. Falling back to simulated data.',
-      };
-    }
-
-    // 6. Request test payment signature / transfer from user's injected wallet
-    // We send 0 ETH or token transaction to recipient on Base Sepolia
+    // 6. Request test payment from user's injected wallet to the agent
+    // Payer: userAddress (out of user's wallet)
+    // Payee: agentRecipient (the data provider agent)
     const txParams = {
       from: userAddress,
-      to: recipient,
+      to: agentRecipient,
       value: '0x0', // Micro-settlement ping or test token transfer
       data: '0x78343032', // "x402" hex identifier
     };
@@ -187,18 +194,18 @@ export async function purchaseFromPaidSource(
         success: false,
         sourceType: 'simulated',
         fallbackToSimulated: true,
-        message: 'User rejected transaction or invalid hash received. Falling back to simulated data.',
+        message: 'User declined payment transaction to the agent. Falling back to simulated data.',
       };
     }
 
-    // 7. Settle against paid endpoint
+    // 7. Settle against paid endpoint with user's on-chain payment proof
     const postRes = await fetch('/api/paid-source', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'x-payment-tx-hash': realTxHash,
       },
-      body: JSON.stringify({ txHash: realTxHash }),
+      body: JSON.stringify({ txHash: realTxHash, vendor: vendorId }),
     });
 
     const postData = await postRes.json();
@@ -210,7 +217,8 @@ export async function purchaseFromPaidSource(
       evidence: postData?.evidence,
       sourceType: 'real_testnet',
       fallbackToSimulated: false,
-      message: 'Real on-chain micropayment settled successfully on Base Sepolia!',
+      agentAddress: agentRecipient,
+      message: `x402 payment settled: User ${userAddress.slice(0, 6)}... paid Agent ${agentRecipient.slice(0, 6)}... on Base Sepolia!`,
     };
   } catch (err: unknown) {
     const errorMsg = err instanceof Error ? err.message : 'Wallet transaction failed';
@@ -219,7 +227,7 @@ export async function purchaseFromPaidSource(
       sourceType: 'simulated',
       fallbackToSimulated: true,
       error: errorMsg,
-      message: `On-chain transaction error: ${errorMsg}. Falling back to simulated vendors.`,
+      message: `Transaction not confirmed by user: ${errorMsg}. Falling back to simulated intelligence.`,
     };
   }
 }

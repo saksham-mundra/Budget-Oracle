@@ -49,6 +49,7 @@ export function VendorTable({ vendors, onChange, onReset }: VendorTableProps) {
             <tr className="border-b border-[#2a2a2a] text-[#9a9a94]">
               <th className="py-2.5 px-3 font-medium">Source / Vendor</th>
               <th className="py-2.5 px-3 font-medium">Type</th>
+              <th className="py-2.5 px-3 font-medium">Agent Recipient Wallet</th>
               <th className="py-2.5 px-3 font-medium">Price (USD)</th>
               <th className="py-2.5 px-3 font-medium">Push Delta</th>
               <th className="py-2.5 px-3 font-medium">Direction</th>
@@ -80,6 +81,9 @@ export function VendorTable({ vendors, onChange, onReset }: VendorTableProps) {
                     >
                       {isSimulated ? 'SIMULATED' : 'REAL (testnet)'}
                     </span>
+                  </td>
+                  <td className="py-2.5 px-3 font-mono text-[11px] text-[#9a9a94]">
+                    {v.agentAddress ? `${v.agentAddress.slice(0, 6)}...${v.agentAddress.slice(-4)}` : 'Dynamic Agent'}
                   </td>
                   <td className="py-2.5 px-3">
                     <div className="flex items-center gap-1">

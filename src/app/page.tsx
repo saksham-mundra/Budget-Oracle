@@ -1,10 +1,11 @@
 'use client';
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { getDefaultVendors, Vendor } from '@/lib/vendors';
+import { getDefaultVendors, Vendor, X402_TESTNET_VENDOR } from '@/lib/vendors';
 import { routeQuestion, RouteDecision } from '@/lib/router';
 import { runAgent, AgentResult, AgentLogEntry } from '@/lib/agent';
 import { ReportResponse, buildVerdictLine } from '@/lib/report';
+import { purchaseFromPaidSource, BASE_SEPOLIA_EXPLORER_URL } from '@/lib/purchase';
 import { WalletConnect } from '@/components/WalletConnect';
 import { VendorTable } from '@/components/VendorTable';
 import { CompareChart } from '@/components/CompareChart';
@@ -27,18 +28,25 @@ export default function BudgetOraclePage() {
   );
   const [budgetUsd, setBudgetUsd] = useState<number>(0.5);
   const [detailedReport, setDetailedReport] = useState<boolean>(false);
+  const [payRealAgentsWithWallet, setPayRealAgentsWithWallet] = useState<boolean>(false);
 
   // Vendors state
-  const [vendors, setVendors] = useState<Vendor[]>(getDefaultVendors());
+  const [vendors, setVendors] = useState<Vendor[]>(() => {
+    const list = getDefaultVendors();
+    // Include the real testnet vendor in the list as well
+    return [...list, { ...X402_TESTNET_VENDOR }];
+  });
 
   // Wallet state
   const [walletAddress, setWalletAddress] = useState<string | null>(null);
   const [isBaseSepolia, setIsBaseSepolia] = useState<boolean>(false);
 
-  // Agent execution results
+  // Execution states
   const [agentResult, setAgentResult] = useState<AgentResult | null>(null);
   const [reportResult, setReportResult] = useState<ReportResponse | null>(null);
   const [isLoadingReport, setIsLoadingReport] = useState<boolean>(false);
+  const [isPurchasingOnChain, setIsPurchasingOnChain] = useState<boolean>(false);
+  const [paymentStatusMsg, setPaymentStatusMsg] = useState<string | null>(null);
 
   // Compare results ($0.10, $0.50, $1.00)
   const [compareResults, setCompareResults] = useState<
@@ -80,11 +88,84 @@ export default function BudgetOraclePage() {
   const handleRunAgent = useCallback(async () => {
     if (!question.trim()) return;
 
-    // 1. Run deterministic spending agent
-    const result = runAgent(question.trim(), budgetUsd, vendors);
+    setPaymentStatusMsg(null);
+
+    // 1. Run deterministic spending agent logic
+    let result = runAgent(question.trim(), budgetUsd, vendors);
+
+    // 2. Real x402 Flow: User connects wallet, pays out of wallet directly to agents
+    if (payRealAgentsWithWallet && walletAddress && isBaseSepolia && result.buys.length > 0) {
+      setIsPurchasingOnChain(true);
+      setPaymentStatusMsg(
+        'MetaMask Prompt: Confirm the x402 micropayment to pay the data provider agent directly on Base Sepolia...'
+      );
+
+      try {
+        const topBuy = result.buys[0];
+        const targetVendor = vendors.find((v) => v.id === topBuy.vendorId) || {
+          id: topBuy.vendorId,
+          name: topBuy.vendorName,
+          agentAddress: '0x845321042E94b15998a6B6002fD4B171eA41E1C5',
+        };
+
+        const purchaseOutcome = await purchaseFromPaidSource(
+          topBuy.priceUsd,
+          0,
+          budgetUsd,
+          walletAddress,
+          targetVendor
+        );
+
+        if (purchaseOutcome.success && purchaseOutcome.txHash) {
+          setPaymentStatusMsg(
+            `Payment settled on Base Sepolia! Tx: ${purchaseOutcome.txHash.slice(0, 10)}... (Funds paid directly from your wallet to Agent)`
+          );
+
+          // Update buy entry with real testnet on-chain proof
+          const updatedBuys = result.buys.map((b, idx) => {
+            if (idx === 0) {
+              return {
+                ...b,
+                sourceType: 'real_testnet' as const,
+                txRef: purchaseOutcome.txHash,
+              };
+            }
+            return b;
+          });
+
+          const updatedLog = result.log.map((entry) => {
+            if (entry.type === 'buy' && entry.vendorId === topBuy.vendorId) {
+              return {
+                ...entry,
+                sourceType: 'real_testnet' as const,
+                txRef: purchaseOutcome.txHash,
+              };
+            }
+            return entry;
+          });
+
+          result = {
+            ...result,
+            buys: updatedBuys,
+            log: updatedLog,
+          };
+        } else {
+          setPaymentStatusMsg(
+            purchaseOutcome.message ||
+              'Payment not completed in wallet. Fell back safely to simulated intelligence.'
+          );
+        }
+      } catch (payErr: unknown) {
+        const msg = payErr instanceof Error ? payErr.message : 'Wallet transaction error';
+        setPaymentStatusMsg(`Wallet note: ${msg}. Retaining reserve and using simulated data.`);
+      } finally {
+        setIsPurchasingOnChain(false);
+      }
+    }
+
     setAgentResult(result);
 
-    // 2. Add to in-memory run history (max 5 items)
+    // 3. Add to in-memory run history (max 5 items)
     setRunHistory((prev) => {
       const newItem: HistoryItem = {
         id: `run-${Date.now()}`,
@@ -98,7 +179,7 @@ export default function BudgetOraclePage() {
       return [newItem, ...prev].slice(0, 5);
     });
 
-    // 3. Generate report via server route
+    // 4. Generate report via server route (Gemma 4)
     setIsLoadingReport(true);
     setReportResult(null);
 
@@ -138,7 +219,7 @@ export default function BudgetOraclePage() {
     } finally {
       setIsLoadingReport(false);
     }
-  }, [question, budgetUsd, vendors, routerDecision]);
+  }, [question, budgetUsd, vendors, routerDecision, payRealAgentsWithWallet, walletAddress, isBaseSepolia]);
 
   // Run on initial page mount with default question and budget
   useEffect(() => {
@@ -174,6 +255,7 @@ export default function BudgetOraclePage() {
       `Prior Probability:   ${(agentResult.prior * 100).toFixed(1)}% YES`,
       `Final Probability:   ${(agentResult.final * 100).toFixed(1)}% YES`,
       `Acquisition Result:  ${agentResult.stopReason}`,
+      `User Payer Wallet:   ${walletAddress || 'Not connected'}`,
       '',
       '-----------------------------------------------------------------',
       'ROUTER DECISION (PURE CODE ENGINE)',
@@ -293,6 +375,41 @@ export default function BudgetOraclePage() {
             ))}
           </div>
 
+          {/* Dynamic Flow: User Wallet -> Agent x402 Payment Option */}
+          <div className="p-3 bg-black/60 border border-[#2a2a2a] rounded space-y-1.5">
+            <label className="flex items-start gap-2.5 text-xs text-[#f4f4f0] cursor-pointer">
+              <input
+                type="checkbox"
+                checked={payRealAgentsWithWallet}
+                onChange={(e) => setPayRealAgentsWithWallet(e.target.checked)}
+                className="w-4 h-4 mt-0.5 rounded bg-black border-[#2a2a2a] text-[#ccff4d] accent-[#ccff4d] cursor-pointer"
+              />
+              <div className="flex-1">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-[#f4f4f0]">
+                    Pay Data Provider Agents via x402 (from connected wallet)
+                  </span>
+                  <span
+                    className={`px-1.5 py-0.2 text-[9px] uppercase font-bold tracking-wider rounded ${
+                      payRealAgentsWithWallet && walletAddress && isBaseSepolia
+                        ? 'bg-[#ccff4d]/15 text-[#ccff4d] border border-[#ccff4d]/40'
+                        : 'bg-[#222222] text-[#9a9a94] border border-[#333333]'
+                    }`}
+                  >
+                    {payRealAgentsWithWallet && walletAddress && isBaseSepolia
+                      ? 'DIRECT AGENT SETTLEMENT'
+                      : 'SIMULATED'}
+                  </span>
+                </div>
+                <p className="text-[11px] text-[#9a9a94] mt-0.5">
+                  {walletAddress
+                    ? `Payments will flow directly from your wallet (${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}) to the data provider agent's wallet on Base Sepolia.`
+                    : 'Connect MetaMask on Base Sepolia to pay data provider agents directly for on-chain evidence.'}
+                </p>
+              </div>
+            </label>
+          </div>
+
           <div className="flex flex-wrap items-center justify-between gap-4 pt-2 border-t border-[#1f1f1f]">
             {/* Budget Input */}
             <div className="flex items-center gap-2">
@@ -332,9 +449,10 @@ export default function BudgetOraclePage() {
             <button
               id="run-agent-btn"
               onClick={handleRunAgent}
-              className="px-5 py-2.5 bg-[#ccff4d] hover:bg-[#b8f037] text-black font-semibold text-sm rounded shadow transition cursor-pointer"
+              disabled={isPurchasingOnChain}
+              className="px-5 py-2.5 bg-[#ccff4d] hover:bg-[#b8f037] text-black font-semibold text-sm rounded shadow transition cursor-pointer disabled:opacity-50"
             >
-              Run Agent
+              {isPurchasingOnChain ? 'Signing in Wallet...' : 'Run Agent'}
             </button>
             <button
               id="compare-btn"
@@ -344,6 +462,12 @@ export default function BudgetOraclePage() {
               Compare ($0.10, $0.50, $1.00)
             </button>
           </div>
+
+          {paymentStatusMsg && (
+            <div className="p-2.5 bg-[#161616] border border-[#2a2a2a] rounded text-xs text-[#ccff4d] font-mono animate-fadeIn">
+              {paymentStatusMsg}
+            </div>
+          )}
         </section>
 
         {/* ========================================================
@@ -376,7 +500,7 @@ export default function BudgetOraclePage() {
                 walletAddress ? 'bg-[#ccff4d]' : 'bg-[#9a9a94]'
               }`}
             />
-            <span className="text-[#9a9a94]">Wallet:</span>
+            <span className="text-[#9a9a94]">Payer:</span>
             <span className="font-mono text-[#f4f4f0]">
               {walletAddress
                 ? `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`
@@ -447,14 +571,22 @@ export default function BudgetOraclePage() {
               </h2>
               <div className="flex items-center gap-3 text-xs font-mono">
                 <span className="text-[#9a9a94]">
-                  Prior: <span className="text-[#f4f4f0]">{(agentResult.prior * 100).toFixed(1)}%</span>
+                  Prior:{' '}
+                  <span className="text-[#f4f4f0]">
+                    {(agentResult.prior * 100).toFixed(1)}%
+                  </span>
                 </span>
                 <span className="text-[#9a9a94]">
-                  Budget: <span className="text-[#f4f4f0]">${agentResult.budgetUsd.toFixed(2)}</span>
+                  Budget:{' '}
+                  <span className="text-[#f4f4f0]">
+                    ${agentResult.budgetUsd.toFixed(2)}
+                  </span>
                 </span>
                 <span className="text-[#9a9a94]">
                   Reserve (10%):{' '}
-                  <span className="text-[#ee86bd]">${agentResult.reserveUsd.toFixed(3)}</span>
+                  <span className="text-[#ee86bd]">
+                    ${agentResult.reserveUsd.toFixed(3)}
+                  </span>
                 </span>
               </div>
             </div>
@@ -463,6 +595,7 @@ export default function BudgetOraclePage() {
             <div className="space-y-2.5">
               {agentResult.log.map((entry, index) => {
                 const isBuy = entry.type === 'buy';
+                const isReal = entry.sourceType === 'real_testnet';
 
                 return (
                   <div
@@ -495,14 +628,12 @@ export default function BudgetOraclePage() {
                       <div className="flex items-center gap-2">
                         <span
                           className={`px-2 py-0.5 text-[10px] uppercase font-bold rounded ${
-                            entry.sourceType === 'real_testnet'
+                            isReal
                               ? 'bg-[#ccff4d]/10 text-[#ccff4d] border border-[#ccff4d]'
                               : 'bg-[#1f1f1f] text-[#9a9a94]'
                           }`}
                         >
-                          {entry.sourceType === 'real_testnet'
-                            ? 'REAL (testnet)'
-                            : 'SIMULATED'}
+                          {isReal ? 'REAL (testnet)' : 'SIMULATED'}
                         </span>
                       </div>
                     </div>
@@ -524,9 +655,21 @@ export default function BudgetOraclePage() {
                         </div>
                         <div className="col-span-2 truncate">
                           <span>Tx Ref: </span>
-                          <span className="font-mono text-[#f4f4f0] text-[11px]">
-                            {entry.txRef}
-                          </span>
+                          {isReal && entry.txRef?.startsWith('0x') ? (
+                            <a
+                              href={`${BASE_SEPOLIA_EXPLORER_URL}/tx/${entry.txRef}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="font-mono text-[#ccff4d] underline text-[11px] hover:text-[#b8f037]"
+                              title="View on Base Sepolia Explorer"
+                            >
+                              {entry.txRef.slice(0, 14)}... ↗
+                            </a>
+                          ) : (
+                            <span className="font-mono text-[#f4f4f0] text-[11px]">
+                              {entry.txRef}
+                            </span>
+                          )}
                         </div>
                       </div>
                     ) : (
@@ -560,8 +703,14 @@ export default function BudgetOraclePage() {
         ======================================================== */}
         {agentResult && (
           <section className="bg-[#111111] border border-[#2a2a2a] rounded-lg p-6 text-center space-y-2">
-            <div className="inline-block px-2.5 py-0.5 text-[10px] uppercase font-bold tracking-wider rounded bg-[#222222] text-[#9a9a94] border border-[#333333]">
-              {hasRealDataUsed ? 'Real data used' : 'Simulated'}
+            <div
+              className={`inline-block px-2.5 py-0.5 text-[10px] uppercase font-bold tracking-wider rounded ${
+                hasRealDataUsed
+                  ? 'bg-[#ccff4d]/10 text-[#ccff4d] border border-[#ccff4d]'
+                  : 'bg-[#222222] text-[#9a9a94] border border-[#333333]'
+              }`}
+            >
+              {hasRealDataUsed ? 'Real data used (on-chain settled)' : 'Simulated'}
             </div>
 
             <div className="text-5xl sm:text-6xl font-serif font-extrabold text-[#ccff4d] tracking-tight">
@@ -698,7 +847,10 @@ export default function BudgetOraclePage() {
         <VendorTable
           vendors={vendors}
           onChange={setVendors}
-          onReset={() => setVendors(getDefaultVendors())}
+          onReset={() => {
+            const list = getDefaultVendors();
+            setVendors([...list, { ...X402_TESTNET_VENDOR }]);
+          }}
         />
 
         {/* ========================================================
