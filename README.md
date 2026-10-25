@@ -32,7 +32,10 @@ Budget Oracle is an autonomous research agent built with Next.js (App Router), T
    - Calls **Gemma 4** (`gemma-4-31b-it` / `@google/genai`) on the server route.
    - Post-generation number consistency validator: if the AI outputs any probability conflicting with the agent's code verdict, it is immediately discarded.
 5. **x402 Micropayments (`src/app/api/paid-source/route.ts` & `src/lib/purchase.ts`)**:
-   - Local paid endpoint returning HTTP 402 with Base Sepolia USDC micropayment specifications until settled on-chain.
+   - The user connects their MetaMask wallet on Base Sepolia.
+   - When evidence is purchased, payments flow **directly out of the user's wallet** into the specific **data provider agent's wallet address** on Base Sepolia via x402 micropayments.
+   - Eliminates any need to configure a static personal recipient address in `.env.local`.
+   - Returns verified on-chain transaction hashes linked directly to the Base Sepolia block explorer.
 
 ---
 
