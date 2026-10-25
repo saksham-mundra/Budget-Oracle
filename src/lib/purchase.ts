@@ -131,9 +131,8 @@ export async function purchaseFromPaidSource(
   }
 
   try {
-    // 4. Verify chain ID
-    const currentChainId = await window.ethereum.request({ method: 'eth_chainId' });
-    if (currentChainId !== BASE_SEPOLIA_CHAIN_ID_HEX && parseInt(currentChainId, 16) !== BASE_SEPOLIA_CHAIN_ID) {
+    const currentChainId = (await window.ethereum.request({ method: 'eth_chainId' })) as string;
+    if (currentChainId !== BASE_SEPOLIA_CHAIN_ID_HEX && parseInt(currentChainId || '0', 16) !== BASE_SEPOLIA_CHAIN_ID) {
       return {
         success: false,
         sourceType: 'simulated',

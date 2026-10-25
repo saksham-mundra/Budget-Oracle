@@ -8,7 +8,6 @@ import {
   validateReportText,
 } from '@/lib/report';
 
-export const runtime = 'nodejs';
 
 export async function POST(req: NextRequest) {
   try {
